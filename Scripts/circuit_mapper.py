@@ -60,6 +60,9 @@ arcpy.env.extent = '"%s"' % arcpy.Describe(linkLayer).catalogPath
 arcpy.env.cellSize = '"%s"' % arcpy.Describe(linkLayer).catalogPath
 CellSize = str(arcpy.env.cellSize)
 
+arcpy.env.cellSize = round(float(arcpy.env.cellSize), 12)
+CellSize = str(arcpy.env.cellSize)
+
 # Set path for density reclass table
 dFile = sys.path[0] + os.sep + "ReclassTables" + os.sep + "density.txt"
 
@@ -88,10 +91,9 @@ elif spPref == "NO-PREFERENCE":
 lcProj = "xxlcproj"
 
 # Make sure inputs are in same projection
-
+linkProjName = arcpy.Describe(linkLayer).spatialreference.name
 if not spPref == "NO-PREFERENCE":
     lcProjName = arcpy.Describe(lcLayer).spatialreference.name
-    linkProjName = arcpy.Describe(linkLayer).spatialreference.name
 
     if not lcProjName == linkProjName:
         arcpy.AddWarning("Landcover and Linkage Layer projections do not match. Attempting to reproject " + lcLayer + "...")
@@ -100,27 +102,34 @@ if not spPref == "NO-PREFERENCE":
 
 # Create cost surface
 arcpy.AddMessage("Creating cost surface raster...")
-r = arcpy.Describe(pntLayer).SpatialReference.LinearUnitName
+desc = arcpy.Describe(pntLayer) #.SpatialReference.LinearUnitName
+r = desc.SpatialReference.LinearUnitName
 if not r == "Meter":
     d = str(ConvertMetersToOther("908", r))
 else:
     d = "908"
+
+pntProjName = desc.spatialreference.name
+# linkProjName = arcpy.Describe(linkLayer).spatialreference.name
+
+if not pntProjName == linkProjName:
+    arcpy.AddWarning("Structure Layer and Linkage Layer projections do not match. Attempting to reproject " + pntLayer + "...")
+    arcpy.ProjectRaster_management(pntLayer, pntProj, linkLayer)
+    pntLayer = pntProj
     
 arcpy.AddMessage("\tCalculating structure density...")
 pntDensity = arcpy.sa.PointDensity(pntLayer, "NONE", CellSize, "CIRCLE " + d + " MAP", "SQUARE_MILES")
 arcpy.AddMessage("\tAssigning house density costs...")
 pntDensity = arcpy.sa.ReclassByASCIIFile(pntDensity, dFile)
 
-# pntDensity.save(tWorkspace + "xxdensity.img")
 # Create cost surface
 if not rFile == "none":
     arcpy.AddMessage("\tAssigning habitat costs...")
     reclass = arcpy.sa.ReclassByASCIIFile(lcLayer, rFile)
-#    reclass.save(tWorkspace + "xxrcls.img")
 
     arcpy.AddMessage("\tCombining habitat and house density costs...")
     xxplus = arcpy.sa.Plus(pntDensity, reclass)
-#    reclass.save(tWorkspace + "xxplus.img")
+    
 else:
     arcpy.AddWarning("\tNo habitat preference specified... \n\tCalculating movement resistance from housing density only...")
     xxplus = pntDensity
@@ -131,8 +140,8 @@ cell = arcpy.GetRasterProperties_management(costRaster, "CELLSIZEX")
 
 if not str(cell) == CellSize:
     arcpy.AddWarning("\tResampling Cost Surface to " + CellSize + " meter cells...")
-    xxResample = arcpy.Resample_management(costRaster, xxresample,CellSize, "CUBIC")
-    costRaster = xxresample
+    xxResample = arcpy.Resample_management(costRaster, xxResample, CellSize, "CUBIC")
+    costRaster = xxResample
 
 ## This is old rank linkages code
 ### Create source and destination polygons (NSEW)
