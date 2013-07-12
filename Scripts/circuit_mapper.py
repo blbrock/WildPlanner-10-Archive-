@@ -55,8 +55,8 @@ outName = sys.argv[8]
 output = sys.argv[9]
 scriptpath = sys.path[0]
 
-# Set the extent to link Layer
-arcpy.env.extent = '"%s"' % arcpy.Describe(linkLayer).catalogPath
+# Set the extent and cell size to link Layer
+arcpy.env.extent = arcpy.Describe(linkLayer).extent
 arcpy.env.cellSize = '"%s"' % arcpy.Describe(linkLayer).catalogPath
 CellSize = str(arcpy.env.cellSize)
 
@@ -261,9 +261,11 @@ sourceName = outName + "_source.asc"
 
 # Check if source patches are raster and convert if necessary
 if dType == "ShapeFile" or dType == "FeatureLayer":
-    sourceRaster = "xxsrcrast"
     arcpy.AddMessage("\tConverting Source Patches to ASCII...")
-    arcpy.PolygonToRaster_conversion(source, sourceID, sourceRaster, "" , "" , CellSize) 
+    sourceRaster = arcpy.FeatureToRaster_conversion(source, sourceID, "in_memory\\xxsrcrast", CellSize)
+    if arcpy.Describe(sourceRaster).SpatialReference.name == 'Unknown':
+        sr = arcpy.Describe(source).SpatialReference
+        arcpy.DefineProjection_management(sourceRaster, sr)
 else:
     sourceRaster = source
 arcpy.RasterToASCII_conversion(sourceRaster, sourceName)
@@ -332,10 +334,7 @@ else:
     else:
         arcpy.AddError('Circuitscape executable not found. Make sure Circuitscape is insalled \nor manually edit the cs_path variable in local_params.py')
         
-####################################################
-# Change next line to correct Circuitscape Path
-# cs_path = "c:\\program files\\circuitscape\\cs_run"
-####################################################
+# Execute Circuitscape
 os.system('"' + lp.cs_path + '" ' + cs_ini)
 
 inASCII = outName + "_cum_curmap.asc"
@@ -343,7 +342,10 @@ outRaster = outName + "_cum_curmap.img"
 curTemp = os.path.dirname(outName) + os.sep + "curTemp.img"
 
 arcpy.AddMessage("\tConverting Circuit Map to Raster...")
-curMap = arcpy.ASCIIToRaster_conversion(inASCII, curTemp, "FLOAT")
+arcpy.ASCIIToRaster_conversion(inASCII, curTemp, "FLOAT")
+if arcpy.Describe(curTemp).SpatialReference.name == 'Unknown':
+    sr = arcpy.Describe(linkLayer).SpatialReference
+    arcpy.DefineProjection_management(curTemp, sr)
 
 # Process Circuitscape output and bring into map
 arcpy.AddMessage("\tSetting Source Areas to NULL...")

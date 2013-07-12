@@ -108,8 +108,45 @@ arcpy.AddMessage("Identifying disturbance areas...")
 # Reclassify to define disturbed areas...
 reclassRaster = arcpy.sa.Reclassify(Euc_Dist, "Value", "0 " + distDistance + " 1", "NODATA")
 arcpy.AddMessage("Identifying potential travel areas...")
+
+# If extraction option selected, process extract mask...
+if not extractMask == "" and not extractMask == "#":
+    arcpy.AddMessage("Extract mask selected. Processing " + arcpy.Describe(extractMask).baseName + " for corridor calculations...")
+    dType = arcpy.Describe(extractMask).dataType
+    extractProjName = arcpy.Describe(extractMask).spatialreference.name
+    outProjName = arcpy.Describe(pointLayer).spatialreference.name
+
+    if not extractProjName == outProjName:
+        arcpy.AddMessage("\tReprojecting extractMask layer...")
+        if dType == "ShapeFile" or dType == "FeatureLayer":
+            arcpy.AddMessage("extractMask: " + extractMask)
+            arcpy.AddMessage("pointLayer: " + pointLayer)
+            output = arcpy.Project_management (extractMask, arcpy.env.scratchFolder + os.path.sep + "reproj.shp", pointLayer)
+        else:
+            output = arcpy.ProjectRaster_management (extractMask, "in_memory\\reproj", pointLayer)
+    if dType == "RasterLayer":
+        arcpy.AddMessage("\tConverting extract mask raster to polygons...")
+        extractPoly = arcpy.RasterToPolygon_conversion (extractMask, "in_memory\\extractPoly", "NO_SIMPLIFY")
+    else:
+        extractPoly = extractMask
+
+#Convert polygon boundaries to lines...
+    arcpy.AddMessage("\tExtracting mask polygon edges to polylines...")
+    extractLine = arcpy.FeatureToLine_management (extractPoly, "in_memory\\extractLine")
+    
+#Convert polygon boundary lines to raster...
+    arcpy.AddMessage("\tConverting extract mask polylines to raster...")
+    arcpy.env.snapRaster = arcpy.Describe(reclassRaster).catalogPath
+    extractEdge = arcpy.FeatureToRaster_conversion (extractLine, "FID", "in_memory\\extractEdge", cellSize)
+    arcpy.env.snapRaster = ""
+    MAX = arcpy.GetRasterProperties_management (extractEdge, "Maximum")
+    extractEdge = arcpy.sa.Reclassify(extractEdge, "Value", "0 " + str(MAX) + " 1 ; NODATA 0", "NODATA")
+    arcpy.AddMessage("\tCombining extraction polygons with disturbance areas...")
+    reclassRaster = arcpy.sa.Con(reclassRaster, 1, extractEdge, "Value = 1")
+
 # Calculate euclidian distance from disturbed areas...
 Euc_Dist2 = arcpy.sa.EucDistance(reclassRaster, "", cellSize, "")
+
 # Get focal max within radius equal one half minimum corridor width...
 maxRaster = arcpy.sa.FocalStatistics(Euc_Dist2, InNeighborhood, "MAXIMUM", "DATA")
 MAX = arcpy.GetRasterProperties_management (Euc_Dist2, "Maximum")
@@ -126,14 +163,6 @@ if viewShed == 'true':
     output = arcpy.sa.Con(outVShed, "1", output, "Value = 0")
 
 if not extractMask == "" and not extractMask == "#":
-
-    extractProjName = arcpy.Describe(extractMask).spatialreference.name
-    outProjName = arcpy.Describe(output).spatialreference.name
-
-    if not extractProjName == outProjName:
-        arcpy.AddMessage("\tReprojecting extractMask layer...")
-        output = arcpy.Project_management (extractMask, os.path.join(arcpy.env.scratchWorkspace, "reproj.shp"), output)
-        
     arcpy.AddMessage('Extracting output raster by ' + extractMask + '...')
     output = arcpy.sa.ExtractByMask (output, extractMask)
     
@@ -153,5 +182,6 @@ arcpy.SetParameterAsText(3, outRaster)
 # Clean up temporary workspace
 try:
     arcpy.Delete_management("in_memory")
+    arcpy.Delete_management(arcpy.env.scratchFolder)
 except:
     pass
