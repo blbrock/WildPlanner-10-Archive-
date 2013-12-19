@@ -99,7 +99,7 @@ if not spPref == "NO-PREFERENCE":
         arcpy.AddWarning("Landcover and Linkage Layer projections do not match. Attempting to reproject " + lcLayer + "...")
         arcpy.ProjectRaster_management(lcLayer, lcProj, linkLayer)
         lcLayer = lcProj
-
+        
 # Create cost surface
 arcpy.AddMessage("Creating cost surface raster...")
 desc = arcpy.Describe(pntLayer) #.SpatialReference.LinearUnitName
@@ -136,12 +136,19 @@ else:
 
 xxCombine = arcpy.sa.Con(xxplus, "50", xxplus, "Value > 50")
 costRaster = arcpy.sa.Con(linkLayer, "50", xxCombine, "Value = 0")
-cell = arcpy.GetRasterProperties_management(costRaster, "CELLSIZEX")
+cell = arcpy.GetRasterProperties_management(costRaster, "CELLSIZEX").getOutput(0)
 
 if not str(cell) == CellSize:
     arcpy.AddWarning("\tResampling Cost Surface to " + CellSize + " meter cells...")
-    xxResample = arcpy.Resample_management(costRaster, xxResample, CellSize, "CUBIC")
+    xxResample = arcpy.Resample_management(costRaster, 'in_memory\\xxResample', CellSize, "CUBIC").getOutput(0)
     costRaster = xxResample
+
+# Extract cost raster by linkage layer to make sure cells outside analysis area are removed
+########################### Need to FIX!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!############################################
+## Stating with arcgis 10.1 costRaster is being produced with negative values and 0 hidden outside the analysis area. These do not
+## display and are removed with extract by mask in toolbox. But the line below does not work for some reason.
+costRaster = arcpy.sa.ExtractByMask(costRaster, linkLayer)
+
 
 ## This is old rank linkages code
 ### Create source and destination polygons (NSEW)
@@ -251,7 +258,8 @@ arcpy.AddMessage("Performing Circuitscape Modeling...")
 
 #Convert inputs to ASCII
 arcpy.AddMessage("\tConverting Cost Surface to ASCII...")
-desc = arcpy.Describe(costRaster)
+# desc = arcpy.Describe(costRaster)
+
 costName = outName + "_cost.asc"
 arcpy.RasterToASCII_conversion(costRaster, costName)
 
@@ -262,13 +270,24 @@ sourceName = outName + "_source.asc"
 # Check if source patches are raster and convert if necessary
 if dType == "ShapeFile" or dType == "FeatureLayer":
     arcpy.AddMessage("\tConverting Source Patches to ASCII...")
-    sourceRaster = arcpy.FeatureToRaster_conversion(source, sourceID, "in_memory\\xxsrcrast", CellSize)
+    arcpy.FeatureToRaster_conversion(source, sourceID, "in_memory\\xxsrcrast", CellSize) # Tried to use .getOutput(0) to set sourceRaster but get inconsistent results and errors.
+    sourceRaster = "in_memory\\xxsrcrast"
+
     if arcpy.Describe(sourceRaster).SpatialReference.name == 'Unknown':
         sr = arcpy.Describe(source).SpatialReference
         arcpy.DefineProjection_management(sourceRaster, sr)
 else:
     sourceRaster = source
+
+# Make sure source patches are in correct projection
+SrcPrj = arcpy.Describe(sourceRaster).spatialreference.name
+if not SrcPrj == linkProjName:
+    arcpy.AddMessage("\tReprojecting Source Patch Layer to " + linkProjName + "...")
+    arcpy.ProjectRaster_management (sourceRaster, "in_memory\\xxsrcrast2", linkLayer) # Tried to use .getOutput(0) to set sourceRaster but get inconsistent results and errors.
+    sourceRaster = "in_memory\\xxsrcrast2"
+   
 arcpy.RasterToASCII_conversion(sourceRaster, sourceName)
+
 
 #Copy circuitscape.ini file to temp workspace and modify
 arcpy.AddMessage("\tGenerating Circuitscape setup file...")

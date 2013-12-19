@@ -24,6 +24,9 @@ from itertools import combinations, chain
 
 link = sys.argv[1]
 fullBuild = sys.argv[2]
+## This needs to be replaced with input variable
+minWidth = int(200)
+######################
 source = sys.argv[3]
 pField = sys.argv[4]
 curSurface = sys.argv[5]
@@ -32,6 +35,22 @@ baseName = sys.argv[6]
 outConnect = baseName + '_connect.shp'
 outLCP = baseName + '_lcp.shp'
 outPAreas = baseName + '_pAreas.shp'
+
+# Find the cost surface associated with the input current surface
+invSurface = arcpy.Describe(curSurface).catalogPath
+invSurface = invSurface.split('_cum')
+invSurface = invSurface[0] + '_cost.asc'
+if not arcpy.Exists(invSurface):
+    arcpy.AddError(('The cost surface associated with:' +
+                    str(arcpy.Describe('curSurface').catalogPath) +
+                    ' is required by this script and cannot be found. Make sure the cost surface named '
+                    +  invSurface +
+                    ' is is in the folder indicated and is named correctly, and run this tool again...')
+                    )
+
+## Make sure outputs can be overwritten
+arcpy.env.overwriteOutput = 1
+
 
 ###-------------------------------CLASSES------------------------------------###
 
@@ -173,15 +192,17 @@ def extractPriorities(link, curSurface, LCPlayer, fullBuild):
     arcpy.AddMessage('Analyzing priority linkage areas...')
     arcpy.AddMessage('\tExtracting fuzzy member set of linkage bottlenecks...')
     fuzzyCurrent = arcpy.sa.FuzzyMembership ( curSurface, arcpy.sa.FuzzyMSLarge(0.9, 1))
+    fuzzyCurrent.save('c:\\workspace\\fuzzcur.img')
     # curExtract = arcpy.sa.SetNull (curSurface, curSurface, 'Value = 0')
     fuzzySTD = arcpy.sa.FocalStatistics(curSurface,arcpy.sa.NbrCircle(1000, "MAP"),"STD", "DATA")
+    fuzzySTD.save('c:\\workspace\\fuzzstd.img')
     #fuzzySTD = arcpy.sa.FocalStatistics(curSurface,arcpy.sa.NbrRectangle(3, 3, "CELL"),"STD", "DATA")
     fuzzySTD = arcpy.sa.FuzzyMembership(fuzzySTD, arcpy.sa.FuzzyLarge("", 1))
-    #fuzzyCurrent.save(os.path.join('c:\\workspace\\fuzzy', 'fuzzcur.img'))
+    fuzzySTD.save('c:\\workspace\\fuzzstd2.img')
     arcpy.AddMessage('\tExtracting fuzzy member set of linkage areas vulnerable to loss...')
     fuzzyLink = arcpy.sa.GreaterThan (link, fullBuild)
     fuzzyLink = arcpy.sa.Float(fuzzyLink)
-    #fuzzyLink.save(os.path.join('c:\\workspace\\fuzzy', 'fuzzlink.img'))
+    fuzzyLink.save('c:\\workspace\\fuzzlink.img')
     
 ##    fuzzyLink = arcpy.sa.FuzzyMembership ( lost_link, arcpy.sa.FuzzyLarge(0.5, 5))
     values = getCombinations(LCPlayer, 'PATH_RNK')[0]
@@ -191,16 +212,28 @@ def extractPriorities(link, curSurface, LCPlayer, fullBuild):
     for v in values:
         if v == 1:
             string = 'Primary Linkage Path...'
+            Spread = 10
+            Hedge = 'VERY'
         elif v==2:
             string = 'Secondary Linkage Paths...'
+            Spread = 5
+            Hedge = 'SOMEWHAT'
         elif v==3:
             string = 'Potential Restoration Paths...'
+            Spread = 5
+            Hedge = 'NONE'
         arcpy.AddMessage('\t\tProcessing ' + string)
         pName = 'prior_' + str(int(v))
-        #pName = os.path.join(workspace, 'prior_' + str(v))
         arcpy.SelectLayerByAttribute_management("lcpLayer", "NEW_SELECTION", "PATH_RNK = " + str(v) )
+        #### arcpy.AddWarning("pName: " + pName)
         cd = arcpy.sa.CostDistance(LCPlayer, curSurface )
-        fuzzyDistance = arcpy.sa.FuzzyMembership (cd, arcpy.sa.FuzzyMSSmall(0.1, 1), 'VERY')
+        cd.save("c:\\workspace\\cd_" + str(v) + ".img")
+        # Set the midpoint for fuzzy membership to 90% of the maximum value of the cost distance raster
+        # NOTE: This could be a user input variable to allow control over selection tolerance.
+        midPoint = float(arcpy.GetRasterProperties_management(cd,"MAXIMUM").getOutput(0))
+        midPoint = midPoint - (midPoint * 0.9)
+        fuzzyDistance = arcpy.sa.FuzzyMembership (cd, arcpy.sa.FuzzySmall(midPoint, Spread), Hedge)
+        #### fuzzyDistance.save('c:\\workspace\\fuzzDistance_' + str(v) + '.img')
         #fuzzyDistance.save(os.path.join('c:\\workspace\\fuzzy', 'fuzzdist_' + str(int(v)) + '.img'))
         overlay = arcpy.sa.FuzzyOverlay ([fuzzyCurrent, fuzzyDistance, fuzzySTD], 'AND')
         overlay = arcpy.sa.Slice (overlay, 2, 'EQUAL_INTERVAL')
@@ -208,25 +241,34 @@ def extractPriorities(link, curSurface, LCPlayer, fullBuild):
         # overlay.save(os.path.join(workspace, 'fuzzyoverlay_' + str(int(v)) + '.img'))
         # Do vulnerable areas need to be enumerated separate from bottlenecks??????
         overlay2 = arcpy.sa.FuzzyOverlay ([fuzzyLink, fuzzyDistance, fuzzyCurrent, fuzzySTD], 'AND')
-        #overlay2.save(pName + '_2.img')
         overlay2 = arcpy.sa.Slice (overlay2, 3, 'EQUAL_INTERVAL')
         overlay = arcpy.sa.Con(overlay2, 3, overlay, 'Value >= 2')
         #overlay = arcpy.sa.FuzzyOverlay ([overlay, overlay2], 'OR')
         overlay = arcpy.sa.ExtractByAttributes (overlay, 'Value >= 2')
-        #overlay = arcpy.sa.Reclassify (overlay, 'Value', arcpy.sa.RemapValue([[3, int(v)]] ))
-        overlay = arcpy.sa.Reclassify (overlay, 'Value', arcpy.sa.RemapValue([[2, int(v)],[3, int(v)]] ))
+    
+## At Arcmap 10.2 the following line stopped working on the second pass of the for loop. It works fine if the commands are
+## executed manually at the python command prompt. Another ArcGIS mystery. Workaround was to use Con to achieve the same result.
+##        overlay = arcpy.sa.Reclassify (overlay, 'Value', arcpy.sa.RemapValue([[2, int(v)],[3, int(v)]] ))
+        overlay = arcpy.sa.Con (overlay, int(v), overlay, 'Value >= 2 AND Value <= 3')
         
 
         #overlay = arcpy.sa.Con(overlay, int(v))
         arcpy.MakeRasterLayer_management(overlay, pName)
-        #overlay.save(pName)
         mosList.append(pName)
+##        for var in [overlay, overlay2]:
+##            arcpy.Delete_management(var)
+##    for var in [fuzzyCurrent, fuzzySTD, fuzzyLink, fuzzyDistance]:
+##        arcpy.Delete_management(var)
+            
 
-    #Add Cleanup routines.  Memory could get full!!!!!!
     
     arcpy.SelectLayerByAttribute_management(LCPlayer, "CLEAR_SELECTION", "" )
     arcpy.MosaicToNewRaster_management(mosList, workspace, "bneck_mos", "", "", "", "1", "MINIMUM")
     arcpy.CalculateStatistics_management(os.path.join(workspace, "bneck_mos"))
+
+##    # Add Cleanup routines.  Memory could get full!!!!!!
+##    for var in [overlay, overlay2, fuzzyCurrent, fuzzySTD, fuzzyLink, fuzzyDistance]:
+##        arcpy.Delete_management(var)
 
     ### add filters here...........................
     arcpy.AddMessage('\tCleaning priority patch boundaries...')
@@ -259,6 +301,8 @@ def extractPriorities(link, curSurface, LCPlayer, fullBuild):
     
     p_patch = arcpy.RasterToPolygon_conversion (os.path.join(workspace, "prior_mos"), 'in_memory\\p_patch', 0)
     b_neck = arcpy.RasterToPolygon_conversion (b_neck, 'in_memory\\b_neck', 0)
+##    p_patch = arcpy.RasterToPolygon_conversion (os.path.join(workspace, "prior_mos"), 'c:\\workspace\\p_patch', 0)
+##    b_neck = arcpy.RasterToPolygon_conversion (b_neck, 'c:\\workspace\\b_neck', 0)
     
     try:
         arcpy.Delete_management(r_patch)
@@ -268,21 +312,34 @@ def extractPriorities(link, curSurface, LCPlayer, fullBuild):
         pass
     
     outP = arcpy.Intersect_analysis ([b_neck, p_patch], 'in_memory\\outP')
+    # outP = arcpy.Intersect_analysis ([b_neck, p_patch], 'c:\\workspace\\outP')
 
 
     arcpy.AddMessage('\tFormatting priority attributes...')
 
-##    fields= arcpy.ListFields(outP)
-##    for field in fields:
-##        arcpy.AddWarning('field.name: ' + field.name)
+## Beginning with ArcGIS 10.2, field names produced from prior processing steps changed from "grid_code" and "grid_code_1"
+## to "gridcode" and "gridcode_1" respectively. The following code checks field names and assigns the correct string to a
+## variable for subsequent processing. Thanks ESRI for once again making random changes that break scripts with no performance
+## benefit.
+    
+    fields= arcpy.ListFields(outP)
+    for field in fields:
+        if field.name == "grid_code":
+            gc = "grid_code"
+        elif field.name == "gridcode":
+            gc = "gridcode"
+        elif field.name == "grid_code_1":
+            gc_1 = "grid_code_1"
+        elif field.name == "gridcode_1":
+            gc_1 = "gridcode_1"
 
     
 
     table = os.path.abspath(os.path.join(os.path.dirname( __file__ ), '..', 'MiscFiles', 'priorityjointable.dbf'))
-    arcpy.JoinField_management(outP, 'grid_code', table, "PATH_RANK", "PATH_TYPE")
-    arcpy.JoinField_management(outP, 'grid_code_1', table, "PATCH_RANK", "PATCH_TYPE")
+    arcpy.JoinField_management(outP, gc, table, "PATH_RANK", "PATH_TYPE")
+    arcpy.JoinField_management(outP, gc_1, table, "PATCH_RANK", "PATCH_TYPE")
     arcpy.AddField_management(outP, "rnk", "SHORT")
-    arcpy.CalculateField_management (outP, "rnk", "int(str(!grid_code!) + str( !grid_code_1!))", "PYTHON", "")
+    arcpy.CalculateField_management (outP, "rnk", '[' + gc + '] & [' + gc_1 + ']', "VB", "")
     if len(connectList) > 0:
         arcpy.JoinField_management(outP, 'rnk', table, "RNK", "PRIORITY_R")
     else:
@@ -299,11 +356,11 @@ def extractPriorities(link, curSurface, LCPlayer, fullBuild):
 
     # Iterate through the fields and set them to fieldinfo
     for field in fields:
-        if field.name == "grid_code":
+        if field.name == gc:
             fieldinfo.addField(field.name, "PATH_RANK", "VISIBLE", "")
         elif field.name == "PATH_TYPE":
             fieldinfo.addField(field.name, "PATH_TYPE", "VISIBLE", "")
-        elif field.name == "grid_code_1":
+        elif field.name == gc_1:
             fieldinfo.addField(field.name, "PATCH_RANK", "VISIBLE", "")
         elif field.name == "PATCH_TYPE":
             fieldinfo.addField(field.name, "PATCH_TYPE", "VISIBLE", "")
@@ -313,6 +370,8 @@ def extractPriorities(link, curSurface, LCPlayer, fullBuild):
             fieldInfo = fieldinfo.addField(field.name, field.name, "HIDDEN", "")
         
     arcpy.MakeFeatureLayer_management (outP, 'pLayer', "", "", fieldinfo)
+    #########
+    # arcpy.CopyFeatures_management("pLayer", "C:\\workspace\\pLayer.shp")
 
     arcpy.AddField_management("pLayer", "ACRES", "DOUBLE", "", "", "", "", "", "", "")
 
@@ -328,38 +387,61 @@ def extractPriorities(link, curSurface, LCPlayer, fullBuild):
     
 
 # Rank Paths ranks pathways connecting source patches using cost path analysis
-def rankPaths(source, pField, curSurface, outConnect):
+def rankPaths(source, pField, curSurface, outConnect, minWidth):
     arcpy.AddMessage('Generating ranked cost paths for ' + outConnect + '...')
 
     cList = []
     zList = []
     rList = []
 
+##    # Append core areas to connected regions to connect regions that are bisected by source habitat
+##    
+##    # Generate Minimum convex hull of connected areas
+##    arcpy.MinimumBoundingGeometry_management(outConnect, "in_memory\\mcp", "CONVEX_HULL", "ALL")
+##    arcpy.Clip_analysis(source, "in_memory\\mcp", "in_memory\\src_clp")
+##
+##    #Merge connected and source
+##    arcpy.Merge_management(["in_memory\\src_clp", outConnect], "in_memory\\connect_merge")
+##
+##    #Dissolve merged connected patches
+##    arcpy.Dissolve_management("in_memory\\connect_merge", "in_memory\\out_connect_merge", "", "", "SINGLE_PART", "")
+##    outConnect = "in_memory\\out_connect_merge"
+
     # Set intersect tolerance to 3X link layer cell size to prevent Intersect from creating multiple line segments where slivers occur
     interTol = str(3 * int(arcpy.Describe(link).meanCellWidth))
+    minWidth = 2 * minWidth
+    cstSurface = arcpy.sa.FocalStatistics(curSurface, arcpy.sa.NbrCircle (minWidth, "Map"), "MEAN", "DATA")
+
 
     # If connected region is not empty, extract cost surface by connected region to limit analysis to connected region
     if len(connectList) > 0:
-        curSurface2 = arcpy.CopyRaster_management(curSurface, "curSurface2")
+        cstSurface2 = arcpy.CopyRaster_management(cstSurface, "cstSurface2")
         arcpy.AddMessage('Extracting cost surface by connected area...')
-        curSurface = arcpy.gp.ExtractByMask_sa(curSurface, outConnect, "cstSurf")
-        curSurface = arcpy.Describe(curSurface).name
-        curSurface2 = arcpy.Describe(curSurface2).name
+        cstSurface = arcpy.gp.ExtractByMask_sa(cstSurface, outConnect, "cstSurf")
+        cstSurface = arcpy.Describe(cstSurface).name
+        cstSurface2 = arcpy.Describe(cstSurface2).name
 
     # Create line segment where source patches touch connected regions to use as sources for cost paths
 
     # Make sure inputs are in same projection
 
     sourceProjName = arcpy.Describe(source).spatialreference.name
-    curProjName = arcpy.Describe(curSurface).spatialreference.name
+    curProjName = arcpy.Describe(cstSurface).spatialreference.name
 
     if not sourceProjName == curProjName:
         arcpy.AddMessage("\tReprojecting source layer...")
-        pSource = arcpy.Project_management (source, os.path.join(arcpy.env.scratchWorkspace, "reproj.shp"), curSurface)
+        pSource = arcpy.Project_management (source, os.path.join(arcpy.env.scratchWorkspace, "reproj.shp"), cstSurface)
     else:
         pSource = source
 
-    
+##    # Add core ares back to current surfaces as zero cost regions
+##    arcpy.env.cellSize = '"%s"' % arcpy.Describe(cstSurface).catalogPath
+##    CellSize = str(arcpy.env.cellSize)
+##    arcpy.PolygonToRaster_conversion(pSource, pField, "in_memory\\rast_source", "", "", CellSize)
+##    no_null = arcpy.sa.Con(arcpy.sa.IsNull("in_memory\\rast_source"),0,1)
+##    cstSurface = arcpy.sa.Con(no_null, 0, cstSurface, "VALUE = 1")
+##    cstSurface2 = arcpy.sa.Con(no_null, 0, cstSurface2, "VALUE = 1")
+        
     arcpy.AddMessage('\tIntersecting source patches with connected area to create source regions...')
     pSource = arcpy.EliminatePolygonPart_management(pSource, "in_memory\\eliminate", "PERCENT", "", 10, "CONTAINED_ONLY")
     try:
@@ -370,7 +452,6 @@ def rankPaths(source, pField, curSurface, outConnect):
     pSource = arcpy.MultipartToSinglepart_management(pSource, "in_memory\\multipart")
     pSource = arcpy.UnsplitLine_management(pSource, "in_memory\\unsplit", pField)
     pSource = arcpy.MakeFeatureLayer_management(pSource, "pSource")
-    # arcpy.CopyFeatures_management(pSource, 'c:\\workspace\\test\\pSource.shp')
 
     # Calculate least-cost path for each pair-wise combination of source patches
     l = getCombinations(source,pField)
@@ -394,11 +475,11 @@ def rankPaths(source, pField, curSurface, outConnect):
             arcpy.AddMessage('\t\tProcessing patch region ' + v + '...')
             arcpy.SelectLayerByAttribute_management(pSource, "NEW_SELECTION", pField + " = " + v )
             arcpy.MakeFeatureLayer_management(pSource, "p_" + v)
-            cd = arcpy.sa.CostDistance("p_" + v, curSurface, "", os.path.join(workspace, "bklnk_" + v ))
+            cd = arcpy.sa.CostDistance("p_" + v, cstSurface, "", os.path.join(workspace, "bklnk_" + v ))
             arcpy.MakeRasterLayer_management(cd, "CostDist_" + v)
             
             if len(connectList) > 0:
-                rd = arcpy.sa.CostDistance("p_" + v, curSurface2, "", os.path.join(workspace, "r_bklnk_" + v )) 
+                rd = arcpy.sa.CostDistance("p_" + v, cstSurface2, "", os.path.join(workspace, "r_bklnk_" + v )) 
                 arcpy.MakeRasterLayer_management(rd, "r_CostDist_" + v)
 
     # Create least-cost paths for each region pair in both directions
@@ -525,9 +606,9 @@ def rankPaths(source, pField, curSurface, outConnect):
         arcpy.Delete_management(os.path.join(workspace, "lcp_mos"))
         arcpy.Delete_management(os.path.join(workspace, "zcp_mos"))
         arcpy.Delete_management(os.path.join(workspace, "rcp_mos"))
+        #arcpy.Delete_management("in_memory")
     except:
-        pass
-    # arcpy.Delete_management("in_memory")
+        pass 
     return (outLCP)
 
 ########################### End Functions #####################################
@@ -553,14 +634,18 @@ else:
     workspace = arcpy.env.scratchWorkspace
 
 # Create LCPs
-invSurface = invertRaster(curSurface, "curSurface")
-paths = rankPaths(source, pField, invSurface, outConnect)
+# invSurface = invertRaster(cstSurface, "curSurface")
+paths = rankPaths(source, pField, invSurface, outConnect, minWidth)
 outLCP = arcpy.CopyFeatures_management(paths, outLCP )
+# arcpy.Delete_management("in_memory")
 
 # Extract priorities
 
+## Set analysis extent same as outConnect
+arcpy.env.extent = arcpy.Describe(outConnect).extent
 pAreas = extractPriorities(link, curSurface, outLCP, fullBuild)
 outPAreas = arcpy.CopyFeatures_management (pAreas, outPAreas)
+# arcpy.Delete_management("in_memory")
 
 #Add outputs to display
 arcpy.SetParameterAsText(6, outConnect)

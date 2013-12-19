@@ -40,7 +40,7 @@ import functionlib as fl
 
 # Set the necessary product code
 arcpy.SetProduct("ArcInfo")
-arcpy.overwriteoutput = 1
+arcpy.env.overwriteoutput = 1
 
 # Check out spatial analyst license
 arcpy.AddMessage("\tChecking availability of spatial analyst license...")  

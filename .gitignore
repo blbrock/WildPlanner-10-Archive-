@@ -1,7 +1,7 @@
 
 WildPlannerTutorial/
 *draft*
-
+*.lock
 #################
 ## Eclipse
 #################

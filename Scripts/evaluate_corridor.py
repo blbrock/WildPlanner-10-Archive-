@@ -35,6 +35,9 @@ import functionlib as fl
 # Check out any necessary licenses
 arcpy.CheckOutExtension("spatial")
 
+# Make sure outputs can be overwritten
+arcpy.env.overwriteOutputs = 1
+
 # Script arguments...
 pointLayer = sys.argv[1]
 minCorridorWidth = sys.argv[2]
